@@ -8,8 +8,14 @@ export interface HealthRouteOptions {
   };
 }
 
+interface HealthPayload {
+  status: 'ok' | 'degraded';
+  actualConnectivity: 'ok' | 'error';
+  budgetDiscoveryMode: AppConfig['budgetDiscoveryMode'];
+}
+
 export const healthRoutes: FastifyPluginAsync<HealthRouteOptions> = async (app, options): Promise<void> => {
-  app.get('/health', async () => {
+  const resolveHealth = async (): Promise<HealthPayload> => {
     let actualConnectivity: 'ok' | 'error' = 'ok';
 
     try {
@@ -23,5 +29,17 @@ export const healthRoutes: FastifyPluginAsync<HealthRouteOptions> = async (app, 
       actualConnectivity,
       budgetDiscoveryMode: options.config.budgetDiscoveryMode
     };
+  };
+
+  app.get('/health', async () => {
+    return resolveHealth();
+  });
+
+  app.get('/ready', async (_request, reply) => {
+    const health = await resolveHealth();
+    if (health.actualConnectivity === 'error') {
+      reply.status(503);
+    }
+    return health;
   });
 };

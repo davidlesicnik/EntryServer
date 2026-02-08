@@ -75,6 +75,18 @@ type ActualApiLike = UnknownRecord & {
   createTransaction?: (...args: unknown[]) => Promise<unknown>;
 };
 
+function sanitizeErrorForLog(error: unknown): Record<string, string> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message
+    };
+  }
+  return {
+    errorType: typeof error
+  };
+}
+
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
@@ -237,7 +249,13 @@ class ApiBudgetSession implements ActualBudgetSession {
           .filter((item): item is ActualTransaction => item !== null);
         all.push(...items);
       } catch (error) {
-        this.logger.debug({ error, accountId: account.id }, 'Primary getTransactions signature failed, trying object signature');
+        this.logger.debug(
+          {
+            accountId: account.id,
+            ...sanitizeErrorForLog(error)
+          },
+          'Primary getTransactions signature failed, trying object signature'
+        );
         const maybe = await this.api.getTransactions({ accountId: account.id, from: params.from, to: params.to });
         const items = asArray(maybe)
           .map((item) => normalizeTransaction(item, account.id))
@@ -298,7 +316,7 @@ class ApiBudgetSession implements ActualBudgetSession {
     try {
       await this.api.closeBudget();
     } catch (error) {
-      this.logger.warn({ error }, 'Failed to close budget session cleanly');
+      this.logger.warn(sanitizeErrorForLog(error), 'Failed to close budget session cleanly');
     }
   }
 }
@@ -365,7 +383,7 @@ export class DefaultActualClientFactory implements ActualClientFactory {
           return normalized;
         }
       } catch (error) {
-        this.logger.debug({ error }, 'Budget listing method failed, trying next fallback');
+        this.logger.debug(sanitizeErrorForLog(error), 'Budget listing method failed, trying next fallback');
       }
     }
 
@@ -436,7 +454,7 @@ export class DefaultActualClientFactory implements ActualClientFactory {
       try {
         await this.api.shutdown();
       } catch (error) {
-        this.logger.warn({ error }, 'Failed to shutdown Actual API cleanly');
+        this.logger.warn(sanitizeErrorForLog(error), 'Failed to shutdown Actual API cleanly');
       }
     }
 

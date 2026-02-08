@@ -4,7 +4,8 @@ import {
   createEntryBodySchema,
   listEntriesQuerySchema,
   listEntriesResponseSchema,
-  entryItemSchema
+  entryItemSchema,
+  idempotencyKeyHeaderSchema
 } from '../schemas/entries';
 
 export interface EntriesRouteOptions {
@@ -42,6 +43,7 @@ export interface EntriesRouteOptions {
       category: string;
       account: string;
       notes?: string;
+      idempotencyKey?: string;
     }): Promise<{
       id: string;
       budgetId: string;
@@ -83,10 +85,12 @@ export const entriesRoutes: FastifyPluginAsync<EntriesRouteOptions> = async (app
     async (request) => {
       const params = budgetIdParamsSchema.parse(request.params);
       const body = createEntryBodySchema.parse(request.body);
+      const idempotencyKey = idempotencyKeyHeaderSchema.parse(request.headers['idempotency-key']);
 
       const result = await options.entryService.createEntry({
         budgetId: params.budgetId,
-        ...body
+        ...body,
+        ...(idempotencyKey ? { idempotencyKey } : {})
       });
 
       return entryItemSchema.parse(result);

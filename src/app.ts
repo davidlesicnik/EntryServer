@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import type { AppConfig } from './config';
 import { buildLogger } from './logger';
 import { buildApiKeyAuth } from './auth/apiKeyAuth';
-import { toErrorEnvelope } from './errors';
+import { AppError, toErrorEnvelope } from './errors';
 import type { ActualClientFactory } from './actual/clientFactory';
 import { healthRoutes } from './routes/health';
 import { budgetsRoutes } from './routes/budgets';
@@ -49,6 +49,7 @@ export interface AppDependencies {
       category: string;
       account: string;
       notes?: string;
+      idempotencyKey?: string;
     }): Promise<{
       id: string;
       budgetId: string;
@@ -95,7 +96,13 @@ export function buildApp(config: AppConfig, dependencies: AppDependencies): Fast
 
   app.setErrorHandler((error, request, reply) => {
     const { statusCode, payload } = toErrorEnvelope(error, request.id);
-    request.log.error({ error, statusCode }, 'request_failed');
+    const errorMetadata =
+      error instanceof AppError
+        ? { errorCode: error.code, errorName: error.name, errorMessage: error.message }
+        : error instanceof Error
+          ? { errorName: error.name, errorMessage: error.message }
+          : { errorType: typeof error };
+    request.log.error({ statusCode, ...errorMetadata }, 'request_failed');
     reply.status(statusCode).send(payload);
   });
 
@@ -110,7 +117,13 @@ export function buildApp(config: AppConfig, dependencies: AppDependencies): Fast
     });
   });
 
-  const apiKeyAuth = dependencies.apiKeyAuth ?? buildApiKeyAuth(config.bridgeApiKey);
+  const apiKeyAuth =
+    dependencies.apiKeyAuth ??
+    buildApiKeyAuth(config.bridgeApiKey, {
+      failureWindowMs: config.authFailureWindowMs,
+      maxAttemptsPerWindow: config.authMaxAttempts,
+      blockDurationMs: config.authBlockMs
+    });
 
   app.register(healthRoutes, {
     config,

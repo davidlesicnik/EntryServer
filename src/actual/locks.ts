@@ -27,18 +27,24 @@ export class BudgetLockManager {
     const existing = this.locks.get(budgetId) ?? { tail: Promise.resolve() };
     const waitFor = existing.tail;
 
+    let released = false;
     let release!: () => void;
     const currentTail = new Promise<void>((resolve) => {
-      release = resolve;
+      release = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        resolve();
+      };
     });
 
     const chainedTail = waitFor.finally(() => currentTail);
     existing.tail = chainedTail;
     this.locks.set(budgetId, existing);
 
-    await withTimeout(waitFor, timeoutMs);
-
     try {
+      await withTimeout(waitFor, timeoutMs);
       return await fn();
     } finally {
       release();

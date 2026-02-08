@@ -1,5 +1,5 @@
 import type { Logger } from 'pino';
-import { NotFoundError } from '../errors';
+import { ConflictError, NotFoundError } from '../errors';
 import {
   fromActualSignedAmount,
   toActualSignedAmount,
@@ -40,6 +40,13 @@ export interface ListEntriesResult {
 
 export interface CreateEntryInput extends CreateEntryBody {
   budgetId: string;
+  idempotencyKey?: string;
+}
+
+interface IdempotencyRecord {
+  fingerprint: string;
+  response: EntryResponseItem;
+  createdAt: number;
 }
 
 function mapById(items: NamedEntity[]): Map<string, string> {
@@ -51,6 +58,8 @@ function findByName(items: NamedEntity[], name: string): NamedEntity | undefined
 }
 
 export class EntryService {
+  private readonly idempotencyRecords = new Map<string, Map<string, IdempotencyRecord>>();
+
   constructor(
     private readonly actualClientFactory: ActualClientFactory,
     private readonly budgetService: {
@@ -58,8 +67,75 @@ export class EntryService {
     },
     private readonly lockManager: BudgetLockManager,
     private readonly lockTimeoutMs: number,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly idempotencyTtlMs: number = 24 * 60 * 60 * 1000
   ) {}
+
+  private fingerprintCreateInput(input: CreateEntryInput): string {
+    return JSON.stringify({
+      amount: input.amount,
+      flow: input.flow,
+      date: input.date,
+      payee: input.payee,
+      category: input.category,
+      account: input.account,
+      notes: input.notes ?? ''
+    });
+  }
+
+  private pruneIdempotencyRecords(budgetId: string, now: number): void {
+    const budgetRecords = this.idempotencyRecords.get(budgetId);
+    if (!budgetRecords) {
+      return;
+    }
+
+    for (const [key, record] of budgetRecords.entries()) {
+      if (now - record.createdAt > this.idempotencyTtlMs) {
+        budgetRecords.delete(key);
+      }
+    }
+
+    if (budgetRecords.size === 0) {
+      this.idempotencyRecords.delete(budgetId);
+    }
+  }
+
+  private getStoredIdempotentResponse(
+    budgetId: string,
+    idempotencyKey: string,
+    fingerprint: string,
+    now: number
+  ): EntryResponseItem | null {
+    this.pruneIdempotencyRecords(budgetId, now);
+
+    const budgetRecords = this.idempotencyRecords.get(budgetId);
+    const existing = budgetRecords?.get(idempotencyKey);
+    if (!existing) {
+      return null;
+    }
+
+    if (existing.fingerprint !== fingerprint) {
+      throw new ConflictError('Idempotency-Key was already used with a different request payload');
+    }
+
+    return existing.response;
+  }
+
+  private storeIdempotentResponse(
+    budgetId: string,
+    idempotencyKey: string,
+    fingerprint: string,
+    response: EntryResponseItem,
+    now: number
+  ): void {
+    const budgetRecords = this.idempotencyRecords.get(budgetId) ?? new Map<string, IdempotencyRecord>();
+    budgetRecords.set(idempotencyKey, {
+      fingerprint,
+      response,
+      createdAt: now
+    });
+    this.idempotencyRecords.set(budgetId, budgetRecords);
+  }
 
   async listEntries(input: ListEntriesInput): Promise<ListEntriesResult> {
     await this.budgetService.assertBudgetAccessible(input.budgetId);
@@ -132,6 +208,15 @@ export class EntryService {
     await this.budgetService.assertBudgetAccessible(input.budgetId);
 
     return this.lockManager.withBudgetLock(input.budgetId, this.lockTimeoutMs, async () => {
+      const now = Date.now();
+      const fingerprint = input.idempotencyKey ? this.fingerprintCreateInput(input) : undefined;
+      if (input.idempotencyKey && fingerprint) {
+        const existing = this.getStoredIdempotentResponse(input.budgetId, input.idempotencyKey, fingerprint, now);
+        if (existing) {
+          return existing;
+        }
+      }
+
       return this.actualClientFactory.withBudget(input.budgetId, async (session) => {
         await session.sync();
 
@@ -178,9 +263,22 @@ export class EntryService {
           notes: input.notes
         });
 
-        await session.sync();
+        try {
+          await session.sync();
+        } catch (error) {
+          this.logger.warn(
+            {
+              budgetId: input.budgetId,
+              transactionId: created.id,
+              idempotencyKey: input.idempotencyKey,
+              errorName: error instanceof Error ? error.name : typeof error,
+              errorMessage: error instanceof Error ? error.message : String(error)
+            },
+            'Post-write sync failed; returning created transaction id'
+          );
+        }
 
-        return {
+        const response: EntryResponseItem = {
           id: created.id,
           budgetId: input.budgetId,
           amount: input.amount,
@@ -191,6 +289,12 @@ export class EntryService {
           account: account.name,
           notes: input.notes
         };
+
+        if (input.idempotencyKey && fingerprint) {
+          this.storeIdempotentResponse(input.budgetId, input.idempotencyKey, fingerprint, response, now);
+        }
+
+        return response;
       });
     });
   }

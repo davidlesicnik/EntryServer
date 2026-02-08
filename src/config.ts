@@ -18,7 +18,11 @@ const envSchema = z
     ENTRYSERVER_BUDGETS_JSON: z.string().optional(),
     ENTRYSERVER_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
     ENTRYSERVER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
-    ENTRYSERVER_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(1048576)
+    ENTRYSERVER_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(1048576),
+    ENTRYSERVER_IDEMPOTENCY_TTL_MS: z.coerce.number().int().positive().default(86400000),
+    ENTRYSERVER_AUTH_FAILURE_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+    ENTRYSERVER_AUTH_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
+    ENTRYSERVER_AUTH_BLOCK_MS: z.coerce.number().int().positive().default(300000)
   })
   .passthrough();
 
@@ -39,6 +43,10 @@ export interface AppConfig {
   lockTimeoutMs: number;
   requestTimeoutMs: number;
   bodyLimitBytes: number;
+  idempotencyTtlMs: number;
+  authFailureWindowMs: number;
+  authMaxAttempts: number;
+  authBlockMs: number;
 }
 
 function parseConfiguredBudgets(raw?: string): BudgetConfigItem[] {
@@ -84,6 +92,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     configuredBudgets,
     lockTimeoutMs: parsedEnv.data.ENTRYSERVER_LOCK_TIMEOUT_MS,
     requestTimeoutMs: parsedEnv.data.ENTRYSERVER_REQUEST_TIMEOUT_MS,
-    bodyLimitBytes: parsedEnv.data.ENTRYSERVER_BODY_LIMIT_BYTES
+    bodyLimitBytes: parsedEnv.data.ENTRYSERVER_BODY_LIMIT_BYTES,
+    idempotencyTtlMs: parsedEnv.data.ENTRYSERVER_IDEMPOTENCY_TTL_MS,
+    authFailureWindowMs: parsedEnv.data.ENTRYSERVER_AUTH_FAILURE_WINDOW_MS,
+    authMaxAttempts: parsedEnv.data.ENTRYSERVER_AUTH_MAX_ATTEMPTS,
+    authBlockMs: parsedEnv.data.ENTRYSERVER_AUTH_BLOCK_MS
   };
 }

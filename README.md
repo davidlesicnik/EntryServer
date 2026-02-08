@@ -9,18 +9,21 @@
 >
 > Because of this, the codebase was **primarily generated using AI tools**. While the app is functional, the internal logic may not follow standard programming patterns.
 
-EntryServer is a self-hosted Fastify API that bridges to Actual Budget for read/write transaction entry automation.
+EntryServer is a self-hosted Fastify API that bridges to [Actual Budget](https://github.com/actualbudget/actual) for read/write transaction entry automation.
 
 ## Features (MVP)
 
 - `GET /health`
+- `GET /ready`
 - `GET /budgets`
 - `GET /budgets/:budgetId/entries`
 - `POST /budgets/:budgetId/entries`
 - API key auth on all endpoints except `/health`
+- Per-client auth failure throttling
 - Unified entry model for `income` and `expense`
 - Positive API amount contract with internal sign mapping to Actual
 - Per-budget write lock and lock timeout handling
+- Optional idempotent POST writes using `Idempotency-Key`
 
 ## Requirements
 
@@ -54,7 +57,7 @@ Optional:
 - `ACTUAL_FILE_PASSWORD`
 - `ENTRYSERVER_BUDGET_DISCOVERY_MODE=auto|configured`
 - `ENTRYSERVER_BUDGETS_JSON`
-- `LOG_LEVEL`, timeout/body/lock tuning vars
+- `LOG_LEVEL`, timeout/body/lock/idempotency/auth tuning vars
 
 ## Run Directly (Node)
 
@@ -223,6 +226,10 @@ Authorization: Bearer <BRIDGE_API_KEY>
 
 Returns process health and Actual connectivity mode.
 
+### `GET /ready`
+
+Returns `200` when Actual connectivity is healthy, `503` when degraded.
+
 ### `GET /budgets`
 
 Response:
@@ -242,6 +249,8 @@ Query params:
 
 - `from` (required) `YYYY-MM-DD`
 - `to` (required) `YYYY-MM-DD`
+- `from` must be `<= to`
+- max date window is `366` days
 - `flow` (optional) `all|income|expense`, default `all`
 - `limit` (optional), default `100`
 - `offset` (optional), default `0`
@@ -258,6 +267,10 @@ Response:
 ```
 
 ### `POST /budgets/:budgetId/entries`
+
+Optional header:
+
+- `Idempotency-Key: <opaque-key>` for safe retries
 
 Request:
 
@@ -303,6 +316,7 @@ Response:
 
 - `400` invalid params/body
 - `401` missing/invalid API key
+- `429` too many invalid API key attempts
 - `404` unknown budget/account/category
 - `409` lock timeout/conflict
 - `502` upstream Actual failures

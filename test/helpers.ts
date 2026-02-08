@@ -13,6 +13,10 @@ export function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     lockTimeoutMs: 200,
     requestTimeoutMs: 15000,
     bodyLimitBytes: 1048576,
+    idempotencyTtlMs: 86400000,
+    authFailureWindowMs: 60000,
+    authMaxAttempts: 10,
+    authBlockMs: 300000,
     ...overrides
   };
 }

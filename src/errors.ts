@@ -31,6 +31,12 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too many requests', details?: unknown) {
+    super(429, 'rate_limited', message, details);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(message: string, details?: unknown) {
     super(404, 'not_found', message, details);
@@ -74,6 +80,7 @@ export function toErrorEnvelope(error: unknown, requestId: string): { statusCode
   }
 
   if (error instanceof AppError) {
+    const includeDetails = error.statusCode >= 400 && error.statusCode < 500;
     return {
       statusCode: error.statusCode,
       payload: {
@@ -81,7 +88,7 @@ export function toErrorEnvelope(error: unknown, requestId: string): { statusCode
           code: error.code,
           message: error.message,
           requestId,
-          details: error.details
+          ...(includeDetails && error.details !== undefined ? { details: error.details } : {})
         }
       }
     };

@@ -171,4 +171,78 @@ describe('EntryService', () => {
       })
     ).rejects.toMatchObject({ statusCode: 404 });
   });
+
+  it('replays create by idempotency key and rejects mismatched payload reuse', async () => {
+    const session = makeSession();
+    const createTransaction = vi.spyOn(session, 'createTransaction');
+    const service = new EntryService(
+      makeFactory(session),
+      budgetService,
+      new BudgetLockManager(),
+      200,
+      pino({ level: 'silent' }),
+      60_000
+    );
+
+    const input = {
+      budgetId: 'budget_abc',
+      amount: 12.34,
+      flow: 'expense' as const,
+      date: '2026-02-08',
+      payee: 'Coffee Shop',
+      category: 'Dining',
+      account: 'Checking',
+      notes: 'Team meeting',
+      idempotencyKey: 'idemp-1'
+    };
+
+    const first = await service.createEntry(input);
+    const second = await service.createEntry(input);
+
+    expect(first.id).toBe(second.id);
+    expect(createTransaction).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.createEntry({
+        ...input,
+        amount: 99.99
+      })
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('returns created entry when post-write sync fails and replays on retry', async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('post-write sync failed'));
+    const session = makeSession({ sync });
+    const createTransaction = vi.spyOn(session, 'createTransaction');
+    const service = new EntryService(
+      makeFactory(session),
+      budgetService,
+      new BudgetLockManager(),
+      200,
+      pino({ level: 'silent' }),
+      60_000
+    );
+
+    const input = {
+      budgetId: 'budget_abc',
+      amount: 12.34,
+      flow: 'expense' as const,
+      date: '2026-02-08',
+      payee: 'Coffee Shop',
+      category: 'Dining',
+      account: 'Checking',
+      notes: 'Team meeting',
+      idempotencyKey: 'idemp-post-sync'
+    };
+
+    const first = await service.createEntry(input);
+    const second = await service.createEntry(input);
+
+    expect(first.id).toBe('txn_created');
+    expect(second.id).toBe('txn_created');
+    expect(createTransaction).toHaveBeenCalledTimes(1);
+  });
 });

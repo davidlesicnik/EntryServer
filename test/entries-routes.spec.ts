@@ -96,13 +96,15 @@ describe('entries routes', () => {
     const response = await request(app.server)
       .post('/budgets/budget_abc/entries')
       .set('Authorization', `Bearer ${config.bridgeApiKey}`)
+      .set('Idempotency-Key', 'create-entry-1')
       .send(payload);
 
     expect(response.status).toBe(200);
     expect(response.body.id).toBe('txn_123');
     expect(createEntry).toHaveBeenCalledWith({
       budgetId: 'budget_abc',
-      ...payload
+      ...payload,
+      idempotencyKey: 'create-entry-1'
     });
 
     await app.close();

@@ -44,4 +44,31 @@ describe('BudgetLockManager', () => {
 
     await blocker;
   });
+
+  it('does not poison subsequent writes after a timed-out waiter', async () => {
+    const manager = new BudgetLockManager();
+    const order: string[] = [];
+
+    const blocker = manager.withBudgetLock('budget_abc', 500, async () => {
+      order.push('blocker:start');
+      await delay(80);
+      order.push('blocker:end');
+    });
+
+    await expect(
+      manager.withBudgetLock('budget_abc', 10, async () => {
+        order.push('timedout:start');
+      })
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    await blocker;
+
+    await manager.withBudgetLock('budget_abc', 500, async () => {
+      order.push('after-timeout:start');
+      await delay(5);
+      order.push('after-timeout:end');
+    });
+
+    expect(order).toEqual(['blocker:start', 'blocker:end', 'after-timeout:start', 'after-timeout:end']);
+  });
 });

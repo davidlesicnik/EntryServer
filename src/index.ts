@@ -18,7 +18,8 @@ async function start(): Promise<void> {
     budgetService,
     lockManager,
     config.lockTimeoutMs,
-    logger
+    logger,
+    config.idempotencyTtlMs
   );
 
   const app = buildApp(config, {
