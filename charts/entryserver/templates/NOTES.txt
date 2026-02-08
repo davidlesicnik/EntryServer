@@ -1,0 +1,13 @@
+1. Get the application URL by running these commands:
+{{- if .Values.ingress.enabled }}
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ (index .Values.ingress.hosts 0).host }}
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "entryserver.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  kubectl get svc --namespace {{ .Release.Namespace }} {{ include "entryserver.fullname" . }} -w
+{{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "entryserver.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  echo http://127.0.0.1:{{ .Values.service.port }}
+{{- end }}

@@ -1,0 +1,68 @@
+replicaCount: 1
+
+image:
+  repository: entryserver
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: entryserver.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources: {}
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+env:
+  LOG_LEVEL: info
+  PORT: "3000"
+  ENTRYSERVER_BUDGET_DISCOVERY_MODE: auto
+  ENTRYSERVER_BUDGETS_JSON: ""
+  ENTRYSERVER_LOCK_TIMEOUT_MS: "5000"
+  ENTRYSERVER_REQUEST_TIMEOUT_MS: "15000"
+  ENTRYSERVER_BODY_LIMIT_BYTES: "1048576"
+
+secretEnv:
+  BRIDGE_API_KEY: "replace-with-long-random-key"
+  ACTUAL_SERVER_URL: "https://actual.example.com"
+  ACTUAL_PASSWORD: "replace-with-actual-service-password"
+  ACTUAL_FILE_PASSWORD: ""
+
+extraEnv: []

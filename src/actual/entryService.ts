@@ -1,0 +1,197 @@
+import type { Logger } from 'pino';
+import { NotFoundError } from '../errors';
+import {
+  fromActualSignedAmount,
+  toActualSignedAmount,
+  type CreateEntryBody,
+  type Flow,
+  type ListFlow
+} from '../schemas/entries';
+import type { ActualClientFactory, NamedEntity } from './clientFactory';
+import type { BudgetLockManager } from './locks';
+
+export interface EntryResponseItem {
+  id: string;
+  budgetId: string;
+  amount: number;
+  flow: Flow;
+  date: string;
+  payee: string;
+  category: string;
+  account: string;
+  notes?: string;
+}
+
+export interface ListEntriesInput {
+  budgetId: string;
+  from: string;
+  to: string;
+  flow: ListFlow;
+  limit: number;
+  offset: number;
+}
+
+export interface ListEntriesResult {
+  items: EntryResponseItem[];
+  limit: number;
+  offset: number;
+  total: number;
+}
+
+export interface CreateEntryInput extends CreateEntryBody {
+  budgetId: string;
+}
+
+function mapById(items: NamedEntity[]): Map<string, string> {
+  return new Map(items.map((item) => [item.id, item.name]));
+}
+
+function findByName(items: NamedEntity[], name: string): NamedEntity | undefined {
+  return items.find((item) => item.name === name);
+}
+
+export class EntryService {
+  constructor(
+    private readonly actualClientFactory: ActualClientFactory,
+    private readonly budgetService: {
+      assertBudgetAccessible(budgetId: string): Promise<void>;
+    },
+    private readonly lockManager: BudgetLockManager,
+    private readonly lockTimeoutMs: number,
+    private readonly logger: Logger
+  ) {}
+
+  async listEntries(input: ListEntriesInput): Promise<ListEntriesResult> {
+    await this.budgetService.assertBudgetAccessible(input.budgetId);
+
+    return this.actualClientFactory.withBudget(input.budgetId, async (session) => {
+      await session.sync();
+
+      const [accounts, categories, payees, transactions] = await Promise.all([
+        session.getAccounts(),
+        session.getCategories(),
+        session.getPayees(),
+        session.listTransactions({ from: input.from, to: input.to })
+      ]);
+
+      const accountById = mapById(accounts);
+      const categoryById = mapById(categories);
+      const payeeById = mapById(payees);
+
+      const filtered = transactions
+        .filter((transaction) => {
+          if (transaction.date < input.from || transaction.date > input.to) {
+            return false;
+          }
+
+          if (input.flow === 'all') {
+            return true;
+          }
+
+          if (input.flow === 'expense') {
+            return transaction.amount < 0;
+          }
+
+          return transaction.amount >= 0;
+        })
+        .sort((a, b) => {
+          if (a.date === b.date) {
+            return a.id.localeCompare(b.id);
+          }
+          return a.date.localeCompare(b.date);
+        });
+
+      const total = filtered.length;
+      const paginated = filtered.slice(input.offset, input.offset + input.limit);
+
+      const items: EntryResponseItem[] = paginated.map((transaction) => {
+        const amountAndFlow = fromActualSignedAmount(transaction.amount);
+        return {
+          id: transaction.id,
+          budgetId: input.budgetId,
+          amount: amountAndFlow.amount,
+          flow: amountAndFlow.flow,
+          date: transaction.date,
+          payee: transaction.payeeId ? payeeById.get(transaction.payeeId) ?? 'Unknown' : 'Unknown',
+          category: transaction.categoryId ? categoryById.get(transaction.categoryId) ?? 'Unknown' : 'Unknown',
+          account: accountById.get(transaction.accountId) ?? 'Unknown',
+          notes: transaction.notes
+        };
+      });
+
+      return {
+        items,
+        limit: input.limit,
+        offset: input.offset,
+        total
+      };
+    });
+  }
+
+  async createEntry(input: CreateEntryInput): Promise<EntryResponseItem> {
+    await this.budgetService.assertBudgetAccessible(input.budgetId);
+
+    return this.lockManager.withBudgetLock(input.budgetId, this.lockTimeoutMs, async () => {
+      return this.actualClientFactory.withBudget(input.budgetId, async (session) => {
+        await session.sync();
+
+        const [accounts, categories, payees] = await Promise.all([
+          session.getAccounts(),
+          session.getCategories(),
+          session.getPayees()
+        ]);
+
+        const account = findByName(accounts, input.account);
+        if (!account) {
+          throw new NotFoundError(`Account not found: ${input.account}`);
+        }
+
+        const category = findByName(categories, input.category);
+        if (!category) {
+          throw new NotFoundError(`Category not found: ${input.category}`);
+        }
+
+        let payee = findByName(payees, input.payee);
+        if (!payee) {
+          payee = await session.createPayee(input.payee);
+        }
+
+        const actualAmount = toActualSignedAmount(input.amount, input.flow);
+
+        this.logger.debug(
+          {
+            budgetId: input.budgetId,
+            accountId: account.id,
+            categoryId: category.id,
+            payeeId: payee.id,
+            amount: actualAmount
+          },
+          'Creating entry in Actual'
+        );
+
+        const created = await session.createTransaction({
+          accountId: account.id,
+          categoryId: category.id,
+          payeeId: payee.id,
+          date: input.date,
+          amount: actualAmount,
+          notes: input.notes
+        });
+
+        await session.sync();
+
+        return {
+          id: created.id,
+          budgetId: input.budgetId,
+          amount: input.amount,
+          flow: input.flow,
+          date: input.date,
+          payee: payee.name,
+          category: category.name,
+          account: account.name,
+          notes: input.notes
+        };
+      });
+    });
+  }
+}

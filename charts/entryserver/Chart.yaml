@@ -1,0 +1,6 @@
+apiVersion: v2
+name: entryserver
+description: Helm chart for EntryServer (Actual Budget bridge API)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
