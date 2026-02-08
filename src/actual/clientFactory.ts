@@ -323,13 +323,32 @@ class ApiBudgetSession implements ActualBudgetSession {
 
 export class DefaultActualClientFactory implements ActualClientFactory {
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
+  private operationTail: Promise<void> = Promise.resolve();
   private readonly api: ActualApiLike;
 
   constructor(
     private readonly config: AppConfig,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    apiOverride?: ActualApiLike
   ) {
-    this.api = actualApi as unknown as ActualApiLike;
+    this.api = apiOverride ?? (actualApi as unknown as ActualApiLike);
+  }
+
+  private async withApiLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.operationTail;
+    let release!: () => void;
+    this.operationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   private async ensureInit(): Promise<void> {
@@ -337,57 +356,69 @@ export class DefaultActualClientFactory implements ActualClientFactory {
       return;
     }
 
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
     if (typeof this.api.init !== 'function') {
       throw new UpstreamError('Actual API init function is not available');
     }
 
-    try {
-      await this.api.init({
-        dataDir: '/tmp/entryserver-actual-data',
-        serverURL: this.config.actualServerUrl,
-        password: this.config.actualPassword
-      });
+    this.initPromise = (async () => {
+      try {
+        await this.api.init({
+          dataDir: '/tmp/entryserver-actual-data',
+          serverURL: this.config.actualServerUrl,
+          password: this.config.actualPassword
+        });
 
-      if (typeof this.api.login === 'function') {
-        await this.api.login(this.config.actualPassword);
+        if (typeof this.api.login === 'function') {
+          await this.api.login(this.config.actualPassword);
+        }
+
+        this.initialized = true;
+      } catch (error) {
+        throw new UpstreamError('Failed to initialize Actual API client', error);
+      } finally {
+        this.initPromise = null;
       }
+    })();
 
-      this.initialized = true;
-    } catch (error) {
-      throw new UpstreamError('Failed to initialize Actual API client', error);
-    }
+    await this.initPromise;
   }
 
   async listBudgets(): Promise<BudgetSummary[]> {
-    await this.ensureInit();
+    return this.withApiLock(async () => {
+      await this.ensureInit();
 
-    const tryMethods: Array<() => Promise<unknown>> = [];
+      const tryMethods: Array<() => Promise<unknown>> = [];
 
-    if (typeof this.api.listUserFiles === 'function') {
-      tryMethods.push(() => this.api.listUserFiles!());
-    }
-    if (typeof this.api.listBudgets === 'function') {
-      tryMethods.push(() => this.api.listBudgets!());
-    }
-    if (typeof this.api.getBudgets === 'function') {
-      tryMethods.push(() => this.api.getBudgets!());
-    }
-
-    for (const call of tryMethods) {
-      try {
-        const result = await call();
-        const normalized = asArray(result)
-          .map(normalizeBudget)
-          .filter((item): item is BudgetSummary => item !== null);
-        if (normalized.length > 0) {
-          return normalized;
-        }
-      } catch (error) {
-        this.logger.debug(sanitizeErrorForLog(error), 'Budget listing method failed, trying next fallback');
+      if (typeof this.api.listUserFiles === 'function') {
+        tryMethods.push(() => this.api.listUserFiles!());
       }
-    }
+      if (typeof this.api.listBudgets === 'function') {
+        tryMethods.push(() => this.api.listBudgets!());
+      }
+      if (typeof this.api.getBudgets === 'function') {
+        tryMethods.push(() => this.api.getBudgets!());
+      }
 
-    return [];
+      for (const call of tryMethods) {
+        try {
+          const result = await call();
+          const normalized = asArray(result)
+            .map(normalizeBudget)
+            .filter((item): item is BudgetSummary => item !== null);
+          if (normalized.length > 0) {
+            return normalized;
+          }
+        } catch (error) {
+          this.logger.debug(sanitizeErrorForLog(error), 'Budget listing method failed, trying next fallback');
+        }
+      }
+
+      return [];
+    });
   }
 
   private async openBudget(budgetId: string): Promise<void> {
@@ -430,15 +461,17 @@ export class DefaultActualClientFactory implements ActualClientFactory {
   }
 
   async withBudget<T>(budgetId: string, fn: (session: ActualBudgetSession) => Promise<T>): Promise<T> {
-    await this.ensureInit();
-    await this.openBudget(budgetId);
-    const session = new ApiBudgetSession(this.api, this.logger);
+    return this.withApiLock(async () => {
+      await this.ensureInit();
+      await this.openBudget(budgetId);
+      const session = new ApiBudgetSession(this.api, this.logger);
 
-    try {
-      return await fn(session);
-    } finally {
-      await session.close();
-    }
+      try {
+        return await fn(session);
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   async ping(): Promise<void> {
@@ -446,18 +479,20 @@ export class DefaultActualClientFactory implements ActualClientFactory {
   }
 
   async shutdown(): Promise<void> {
-    if (!this.initialized) {
-      return;
-    }
-
-    if (typeof this.api.shutdown === 'function') {
-      try {
-        await this.api.shutdown();
-      } catch (error) {
-        this.logger.warn(sanitizeErrorForLog(error), 'Failed to shutdown Actual API cleanly');
+    await this.withApiLock(async () => {
+      if (!this.initialized) {
+        return;
       }
-    }
 
-    this.initialized = false;
+      if (typeof this.api.shutdown === 'function') {
+        try {
+          await this.api.shutdown();
+        } catch (error) {
+          this.logger.warn(sanitizeErrorForLog(error), 'Failed to shutdown Actual API cleanly');
+        }
+      }
+
+      this.initialized = false;
+    });
   }
 }

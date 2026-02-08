@@ -20,9 +20,16 @@ const envSchema = z
     ENTRYSERVER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
     ENTRYSERVER_BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(1048576),
     ENTRYSERVER_IDEMPOTENCY_TTL_MS: z.coerce.number().int().positive().default(86400000),
+    ENTRYSERVER_IDEMPOTENCY_MAX_RECORDS: z.coerce.number().int().positive().default(10000),
     ENTRYSERVER_AUTH_FAILURE_WINDOW_MS: z.coerce.number().int().positive().default(60000),
     ENTRYSERVER_AUTH_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
-    ENTRYSERVER_AUTH_BLOCK_MS: z.coerce.number().int().positive().default(300000)
+    ENTRYSERVER_AUTH_BLOCK_MS: z.coerce.number().int().positive().default(300000),
+    ENTRYSERVER_AUTH_STATE_TTL_MS: z.coerce.number().int().positive().default(900000),
+    ENTRYSERVER_AUTH_MAX_TRACKED_CLIENTS: z.coerce.number().int().positive().default(10000),
+    ENTRYSERVER_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+    ENTRYSERVER_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(600),
+    ENTRYSERVER_RATE_LIMIT_STATE_TTL_MS: z.coerce.number().int().positive().default(300000),
+    ENTRYSERVER_RATE_LIMIT_MAX_TRACKED_CLIENTS: z.coerce.number().int().positive().default(10000)
   })
   .passthrough();
 
@@ -44,9 +51,16 @@ export interface AppConfig {
   requestTimeoutMs: number;
   bodyLimitBytes: number;
   idempotencyTtlMs: number;
+  idempotencyMaxRecords: number;
   authFailureWindowMs: number;
   authMaxAttempts: number;
   authBlockMs: number;
+  authStateTtlMs: number;
+  authMaxTrackedClients: number;
+  requestRateLimitWindowMs: number;
+  requestRateLimitMaxRequests: number;
+  requestRateLimitStateTtlMs: number;
+  requestRateLimitMaxTrackedClients: number;
 }
 
 function parseConfiguredBudgets(raw?: string): BudgetConfigItem[] {
@@ -94,8 +108,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     requestTimeoutMs: parsedEnv.data.ENTRYSERVER_REQUEST_TIMEOUT_MS,
     bodyLimitBytes: parsedEnv.data.ENTRYSERVER_BODY_LIMIT_BYTES,
     idempotencyTtlMs: parsedEnv.data.ENTRYSERVER_IDEMPOTENCY_TTL_MS,
+    idempotencyMaxRecords: parsedEnv.data.ENTRYSERVER_IDEMPOTENCY_MAX_RECORDS,
     authFailureWindowMs: parsedEnv.data.ENTRYSERVER_AUTH_FAILURE_WINDOW_MS,
     authMaxAttempts: parsedEnv.data.ENTRYSERVER_AUTH_MAX_ATTEMPTS,
-    authBlockMs: parsedEnv.data.ENTRYSERVER_AUTH_BLOCK_MS
+    authBlockMs: parsedEnv.data.ENTRYSERVER_AUTH_BLOCK_MS,
+    authStateTtlMs: parsedEnv.data.ENTRYSERVER_AUTH_STATE_TTL_MS,
+    authMaxTrackedClients: parsedEnv.data.ENTRYSERVER_AUTH_MAX_TRACKED_CLIENTS,
+    requestRateLimitWindowMs: parsedEnv.data.ENTRYSERVER_RATE_LIMIT_WINDOW_MS,
+    requestRateLimitMaxRequests: parsedEnv.data.ENTRYSERVER_RATE_LIMIT_MAX_REQUESTS,
+    requestRateLimitStateTtlMs: parsedEnv.data.ENTRYSERVER_RATE_LIMIT_STATE_TTL_MS,
+    requestRateLimitMaxTrackedClients: parsedEnv.data.ENTRYSERVER_RATE_LIMIT_MAX_TRACKED_CLIENTS
   };
 }

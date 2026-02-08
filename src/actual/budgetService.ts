@@ -16,19 +16,25 @@ export class BudgetService {
   }
 
   async listBudgets(): Promise<BudgetSummary[]> {
+    const configured = this.configuredBudgets();
+
     if (this.config.budgetDiscoveryMode === 'configured') {
-      return this.configuredBudgets();
+      return configured;
     }
 
     try {
       const autoBudgets = await this.actualClientFactory.listBudgets();
       if (autoBudgets.length > 0) {
+        if (configured.length > 0) {
+          const allowedIds = new Set(configured.map((budget) => budget.id));
+          return autoBudgets.filter((budget) => allowedIds.has(budget.id));
+        }
         return autoBudgets;
       }
 
-      return this.configuredBudgets();
+      return configured;
     } catch (error) {
-      const fallback = this.configuredBudgets();
+      const fallback = configured;
       if (fallback.length > 0) {
         return fallback;
       }

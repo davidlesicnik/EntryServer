@@ -19,7 +19,8 @@ async function start(): Promise<void> {
     lockManager,
     config.lockTimeoutMs,
     logger,
-    config.idempotencyTtlMs
+    config.idempotencyTtlMs,
+    config.idempotencyMaxRecords
   );
 
   const app = buildApp(config, {

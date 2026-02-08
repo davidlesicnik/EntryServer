@@ -59,6 +59,7 @@ function findByName(items: NamedEntity[], name: string): NamedEntity | undefined
 
 export class EntryService {
   private readonly idempotencyRecords = new Map<string, Map<string, IdempotencyRecord>>();
+  private idempotencyRecordCount = 0;
 
   constructor(
     private readonly actualClientFactory: ActualClientFactory,
@@ -68,7 +69,8 @@ export class EntryService {
     private readonly lockManager: BudgetLockManager,
     private readonly lockTimeoutMs: number,
     private readonly logger: Logger,
-    private readonly idempotencyTtlMs: number = 24 * 60 * 60 * 1000
+    private readonly idempotencyTtlMs: number = 24 * 60 * 60 * 1000,
+    private readonly idempotencyMaxRecords: number = 10_000
   ) {}
 
   private fingerprintCreateInput(input: CreateEntryInput): string {
@@ -83,21 +85,52 @@ export class EntryService {
     });
   }
 
-  private pruneIdempotencyRecords(budgetId: string, now: number): void {
+  private deleteRecord(budgetId: string, key: string): void {
     const budgetRecords = this.idempotencyRecords.get(budgetId);
     if (!budgetRecords) {
       return;
     }
 
-    for (const [key, record] of budgetRecords.entries()) {
-      if (now - record.createdAt > this.idempotencyTtlMs) {
-        budgetRecords.delete(key);
-      }
+    if (budgetRecords.delete(key)) {
+      this.idempotencyRecordCount = Math.max(0, this.idempotencyRecordCount - 1);
     }
 
     if (budgetRecords.size === 0) {
       this.idempotencyRecords.delete(budgetId);
     }
+  }
+
+  private pruneExpiredIdempotencyRecords(now: number): void {
+    for (const [budgetId, budgetRecords] of this.idempotencyRecords.entries()) {
+      for (const [key, record] of budgetRecords.entries()) {
+        if (now - record.createdAt > this.idempotencyTtlMs) {
+          this.deleteRecord(budgetId, key);
+        }
+      }
+    }
+  }
+
+  private evictOldestIdempotencyRecord(): boolean {
+    let oldestBudgetId: string | null = null;
+    let oldestKey: string | null = null;
+    let oldestCreatedAt = Number.POSITIVE_INFINITY;
+
+    for (const [budgetId, budgetRecords] of this.idempotencyRecords.entries()) {
+      for (const [key, record] of budgetRecords.entries()) {
+        if (record.createdAt < oldestCreatedAt) {
+          oldestCreatedAt = record.createdAt;
+          oldestBudgetId = budgetId;
+          oldestKey = key;
+        }
+      }
+    }
+
+    if (!oldestBudgetId || !oldestKey) {
+      return false;
+    }
+
+    this.deleteRecord(oldestBudgetId, oldestKey);
+    return true;
   }
 
   private getStoredIdempotentResponse(
@@ -106,7 +139,7 @@ export class EntryService {
     fingerprint: string,
     now: number
   ): EntryResponseItem | null {
-    this.pruneIdempotencyRecords(budgetId, now);
+    this.pruneExpiredIdempotencyRecords(now);
 
     const budgetRecords = this.idempotencyRecords.get(budgetId);
     const existing = budgetRecords?.get(idempotencyKey);
@@ -129,12 +162,27 @@ export class EntryService {
     now: number
   ): void {
     const budgetRecords = this.idempotencyRecords.get(budgetId) ?? new Map<string, IdempotencyRecord>();
+    const isNewRecord = !budgetRecords.has(idempotencyKey);
+
+    if (isNewRecord) {
+      this.pruneExpiredIdempotencyRecords(now);
+      while (this.idempotencyRecordCount >= this.idempotencyMaxRecords) {
+        const evicted = this.evictOldestIdempotencyRecord();
+        if (!evicted) {
+          break;
+        }
+      }
+    }
+
     budgetRecords.set(idempotencyKey, {
       fingerprint,
       response,
       createdAt: now
     });
     this.idempotencyRecords.set(budgetId, budgetRecords);
+    if (isNewRecord) {
+      this.idempotencyRecordCount += 1;
+    }
   }
 
   async listEntries(input: ListEntriesInput): Promise<ListEntriesResult> {

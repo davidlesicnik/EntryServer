@@ -245,4 +245,36 @@ describe('EntryService', () => {
     expect(second.id).toBe('txn_created');
     expect(createTransaction).toHaveBeenCalledTimes(1);
   });
+
+  it('bounds idempotency cache size and evicts oldest records when full', async () => {
+    const session = makeSession();
+    const createTransaction = vi.spyOn(session, 'createTransaction');
+    const service = new EntryService(
+      makeFactory(session),
+      budgetService,
+      new BudgetLockManager(),
+      200,
+      pino({ level: 'silent' }),
+      60_000,
+      2
+    );
+
+    const baseInput = {
+      budgetId: 'budget_abc',
+      amount: 12.34,
+      flow: 'expense' as const,
+      date: '2026-02-08',
+      payee: 'Coffee Shop',
+      category: 'Dining',
+      account: 'Checking',
+      notes: 'Team meeting'
+    };
+
+    await service.createEntry({ ...baseInput, idempotencyKey: 'idemp-a' });
+    await service.createEntry({ ...baseInput, idempotencyKey: 'idemp-b' });
+    await service.createEntry({ ...baseInput, idempotencyKey: 'idemp-c' });
+    await service.createEntry({ ...baseInput, idempotencyKey: 'idemp-a' });
+
+    expect(createTransaction).toHaveBeenCalledTimes(4);
+  });
 });

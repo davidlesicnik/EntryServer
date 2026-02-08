@@ -20,6 +20,7 @@ EntryServer is a self-hosted Fastify API that bridges to [Actual Budget](https:/
 - `POST /budgets/:budgetId/entries`
 - API key auth on all endpoints except `/health`
 - Per-client auth failure throttling
+- Per-client authenticated request rate limiting
 - Unified entry model for `income` and `expense`
 - Positive API amount contract with internal sign mapping to Actual
 - Per-budget write lock and lock timeout handling
@@ -57,7 +58,7 @@ Optional:
 - `ACTUAL_FILE_PASSWORD`
 - `ENTRYSERVER_BUDGET_DISCOVERY_MODE=auto|configured`
 - `ENTRYSERVER_BUDGETS_JSON`
-- `LOG_LEVEL`, timeout/body/lock/idempotency/auth tuning vars
+- `LOG_LEVEL`, timeout/body/lock/idempotency/auth/rate-limit tuning vars
 
 ## Run Directly (Node)
 
@@ -89,6 +90,8 @@ curl -s http://localhost:3000/health
 ```
 
 ## Build Container Image
+
+Container builds require a committed `package-lock.json` and use `npm ci` for reproducible dependency resolution.
 
 Build local image:
 
@@ -311,12 +314,14 @@ Response:
 - `account` and `category` must match exact names.
 - `payee` resolves by exact name; created if missing.
 - Sync runs before reads and before/after writes.
+- In `auto` budget mode, configured budgets (if provided) act as an allowlist filter.
+- `Idempotency-Key` dedupe is process-local; for cross-replica/restart guarantees use a shared external store.
 
 ## Error Model
 
 - `400` invalid params/body
 - `401` missing/invalid API key
-- `429` too many invalid API key attempts
+- `429` auth throttle or authenticated request rate limit exceeded
 - `404` unknown budget/account/category
 - `409` lock timeout/conflict
 - `502` upstream Actual failures

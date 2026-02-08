@@ -97,4 +97,38 @@ describe('API key auth', () => {
     expect(second.status).toBe(429);
     expect(second.body.error.code).toBe('rate_limited');
   });
+
+  it('tracks auth throttling by forwarded client identity to reduce proxy-wide lockouts', async () => {
+    await app.close();
+    config = makeConfig({
+      authMaxAttempts: 2,
+      authFailureWindowMs: 60_000,
+      authBlockMs: 120_000
+    });
+    app = buildApp(config, dependencies);
+
+    const firstClientAttempt = await request(app.server)
+      .get('/budgets')
+      .set('X-Forwarded-For', '198.51.100.10')
+      .set('Authorization', 'Bearer wrong-1');
+    expect(firstClientAttempt.status).toBe(401);
+
+    const secondClientAttempt = await request(app.server)
+      .get('/budgets')
+      .set('X-Forwarded-For', '198.51.100.11')
+      .set('Authorization', 'Bearer wrong-2');
+    expect(secondClientAttempt.status).toBe(401);
+
+    const firstClientBlocked = await request(app.server)
+      .get('/budgets')
+      .set('X-Forwarded-For', '198.51.100.10')
+      .set('Authorization', 'Bearer wrong-3');
+    expect(firstClientBlocked.status).toBe(429);
+
+    const secondClientStillAllowed = await request(app.server)
+      .get('/budgets')
+      .set('X-Forwarded-For', '198.51.100.11')
+      .set('Authorization', `Bearer ${config.bridgeApiKey}`);
+    expect(secondClientStillAllowed.status).toBe(200);
+  });
 });

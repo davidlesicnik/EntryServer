@@ -1,23 +1,29 @@
 import { timingSafeEqual } from 'node:crypto';
 import { type FastifyReply, type FastifyRequest, type preHandlerHookHandler } from 'fastify';
 import { TooManyRequestsError, UnauthorizedError } from '../errors';
+import { resolveClientIdentifier } from './clientIdentity';
 
 interface AuthFailureState {
   attempts: number;
   windowStartedAt: number;
   blockedUntil: number;
+  lastSeenAt: number;
 }
 
 export interface ApiKeyAuthOptions {
   failureWindowMs?: number;
   maxAttemptsPerWindow?: number;
   blockDurationMs?: number;
+  stateTtlMs?: number;
+  maxTrackedClients?: number;
   now?: () => number;
 }
 
 const DEFAULT_FAILURE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_ATTEMPTS_PER_WINDOW = 10;
 const DEFAULT_BLOCK_DURATION_MS = 300_000;
+const DEFAULT_STATE_TTL_MS = 900_000;
+const DEFAULT_MAX_TRACKED_CLIENTS = 10_000;
 const BEARER_HEADER_PATTERN = /^\s*Bearer\s+(\S+)\s*$/i;
 
 function extractBearerToken(authorization: string): string | null {
@@ -34,21 +40,54 @@ function compareApiKey(actualToken: string, expectedApiKey: string): boolean {
   return timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
+function pruneFailures(
+  failuresByClient: Map<string, AuthFailureState>,
+  now: number,
+  stateTtlMs: number,
+  maxTrackedClients: number
+): void {
+  for (const [clientId, state] of failuresByClient.entries()) {
+    if (now - state.lastSeenAt > stateTtlMs && state.blockedUntil <= now) {
+      failuresByClient.delete(clientId);
+    }
+  }
+
+  if (failuresByClient.size <= maxTrackedClients) {
+    return;
+  }
+
+  const entriesByAge = [...failuresByClient.entries()].sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+  const overflowCount = failuresByClient.size - maxTrackedClients;
+  for (let index = 0; index < overflowCount; index += 1) {
+    const entry = entriesByAge[index];
+    if (entry) {
+      failuresByClient.delete(entry[0]);
+    }
+  }
+}
+
 function countFailedAttempt(
   failuresByClient: Map<string, AuthFailureState>,
   clientId: string,
   now: number,
   failureWindowMs: number,
   maxAttemptsPerWindow: number,
-  blockDurationMs: number
+  blockDurationMs: number,
+  stateTtlMs: number,
+  maxTrackedClients: number
 ): void {
+  pruneFailures(failuresByClient, now, stateTtlMs, maxTrackedClients);
+
   const existing =
     failuresByClient.get(clientId) ??
     ({
       attempts: 0,
       windowStartedAt: now,
-      blockedUntil: 0
+      blockedUntil: 0,
+      lastSeenAt: now
     } satisfies AuthFailureState);
+
+  existing.lastSeenAt = now;
 
   if (existing.blockedUntil > now) {
     throw new TooManyRequestsError('Too many invalid API key attempts', {
@@ -85,12 +124,15 @@ export function buildApiKeyAuth(expectedApiKey: string, options: ApiKeyAuthOptio
   const failureWindowMs = options.failureWindowMs ?? DEFAULT_FAILURE_WINDOW_MS;
   const maxAttemptsPerWindow = options.maxAttemptsPerWindow ?? DEFAULT_MAX_ATTEMPTS_PER_WINDOW;
   const blockDurationMs = options.blockDurationMs ?? DEFAULT_BLOCK_DURATION_MS;
+  const stateTtlMs = options.stateTtlMs ?? DEFAULT_STATE_TTL_MS;
+  const maxTrackedClients = options.maxTrackedClients ?? DEFAULT_MAX_TRACKED_CLIENTS;
   const now = options.now ?? Date.now;
   const failuresByClient = new Map<string, AuthFailureState>();
 
   return async function apiKeyAuth(_request: FastifyRequest, _reply: FastifyReply): Promise<void> {
-    const clientId = _request.ip || 'unknown';
+    const clientId = resolveClientIdentifier(_request);
     const nowTs = now();
+    pruneFailures(failuresByClient, nowTs, stateTtlMs, maxTrackedClients);
 
     const authorization = _request.headers.authorization;
 
@@ -101,7 +143,9 @@ export function buildApiKeyAuth(expectedApiKey: string, options: ApiKeyAuthOptio
         nowTs,
         failureWindowMs,
         maxAttemptsPerWindow,
-        blockDurationMs
+        blockDurationMs,
+        stateTtlMs,
+        maxTrackedClients
       );
       throw new UnauthorizedError();
     }
@@ -114,7 +158,9 @@ export function buildApiKeyAuth(expectedApiKey: string, options: ApiKeyAuthOptio
         nowTs,
         failureWindowMs,
         maxAttemptsPerWindow,
-        blockDurationMs
+        blockDurationMs,
+        stateTtlMs,
+        maxTrackedClients
       );
       throw new UnauthorizedError();
     }

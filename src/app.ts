@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import type { AppConfig } from './config';
 import { buildLogger } from './logger';
 import { buildApiKeyAuth } from './auth/apiKeyAuth';
+import { buildRequestRateLimit } from './auth/requestRateLimit';
 import { AppError, toErrorEnvelope } from './errors';
 import type { ActualClientFactory } from './actual/clientFactory';
 import { healthRoutes } from './routes/health';
@@ -122,8 +123,16 @@ export function buildApp(config: AppConfig, dependencies: AppDependencies): Fast
     buildApiKeyAuth(config.bridgeApiKey, {
       failureWindowMs: config.authFailureWindowMs,
       maxAttemptsPerWindow: config.authMaxAttempts,
-      blockDurationMs: config.authBlockMs
+      blockDurationMs: config.authBlockMs,
+      stateTtlMs: config.authStateTtlMs,
+      maxTrackedClients: config.authMaxTrackedClients
     });
+  const requestRateLimit = buildRequestRateLimit({
+    windowMs: config.requestRateLimitWindowMs,
+    maxRequests: config.requestRateLimitMaxRequests,
+    stateTtlMs: config.requestRateLimitStateTtlMs,
+    maxTrackedClients: config.requestRateLimitMaxTrackedClients
+  });
 
   app.register(healthRoutes, {
     config,
@@ -131,10 +140,12 @@ export function buildApp(config: AppConfig, dependencies: AppDependencies): Fast
   });
   app.register(budgetsRoutes, {
     apiKeyAuth,
+    requestRateLimit,
     budgetService: dependencies.budgetService
   });
   app.register(entriesRoutes, {
     apiKeyAuth,
+    requestRateLimit,
     entryService: dependencies.entryService
   });
 

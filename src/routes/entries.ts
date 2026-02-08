@@ -10,6 +10,7 @@ import {
 
 export interface EntriesRouteOptions {
   apiKeyAuth: preHandlerHookHandler;
+  requestRateLimit?: preHandlerHookHandler;
   entryService: {
     listEntries(input: {
       budgetId: string;
@@ -59,10 +60,12 @@ export interface EntriesRouteOptions {
 }
 
 export const entriesRoutes: FastifyPluginAsync<EntriesRouteOptions> = async (app, options): Promise<void> => {
+  const preHandler = options.requestRateLimit ? [options.apiKeyAuth, options.requestRateLimit] : options.apiKeyAuth;
+
   app.get(
     '/budgets/:budgetId/entries',
     {
-      preHandler: options.apiKeyAuth
+      preHandler
     },
     async (request) => {
       const params = budgetIdParamsSchema.parse(request.params);
@@ -80,7 +83,7 @@ export const entriesRoutes: FastifyPluginAsync<EntriesRouteOptions> = async (app
   app.post(
     '/budgets/:budgetId/entries',
     {
-      preHandler: options.apiKeyAuth
+      preHandler
     },
     async (request) => {
       const params = budgetIdParamsSchema.parse(request.params);
